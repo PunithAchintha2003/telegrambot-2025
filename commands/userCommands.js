@@ -243,7 +243,7 @@ function registerUserCommands(bot, channelIdentifier, isAdminFunction, userKeybo
       }
 
       userStates.set(telegramId, { command: 'withdraw', step: 'ask_amount' });
-      await bot.sendMessage(chatId, `💸 Enter withdrawal amount in USDT.\nMinimum: USDT ${MIN_WITHDRAWAL_AMOUNT}\nFee: USDT ${WITHDRAWAL_FEE}\nYour balance: USDT ${user.balance.toFixed(2)}\n\nYour USDT (TRC20) address for withdrawal: \`${user.paymentDetails.usdtWalletAddress}\``,
+      await bot.sendMessage(chatId, `💸 Enter withdrawal amount in USDT.\nMinimum: USDT ${MIN_WITHDRAWAL_AMOUNT}\nFee: USDT ${WITHDRAWAL_FEE}\nYour balance: USDT ${user.balance.toFixed(2)}\n\n( Ex: If your account balance is USDT 1000, submit a withdrawal amount of USDT 997 or less )\n\nYour USDT (TRC20) address for withdrawal: \`${user.paymentDetails.usdtWalletAddress}\``,
       { parse_mode: 'Markdown', reply_markup: { remove_keyboard: true } });
 
     } catch (error) {
