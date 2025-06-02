@@ -4,74 +4,81 @@ const mongoose = require('mongoose');
 
 const userSchema = new mongoose.Schema({
   telegramId: { type: String, required: true, unique: true },
-  username: { type: String, default: null, sparse: true },
+  username: { type: String, default: null, sparse: true }, // Added sparse index for optional unique usernames
   fullName: { type: String, default: null },
 
   // Referral system
-  // Added index: true for performance on queries involving referralCode
-  referralCode: { type: String, required: true, unique: true, index: true },
-  // Added index: true for performance on queries involving referredBy (e.g., finding all referred users)
-  referredBy: { type: String, default: null, index: true },
+  referralCode: { type: String, required: true, unique: true, index: true }, // Keep index: true here
+  referredBy: { type: String, default: null, index: true }, // Keep index: true here
 
   isVerified: { type: Boolean, default: false },
 
   // VIP membership and balance
-  vipLevel: { type: Number, default: 0 },                       // Current VIP level (0 means no VIP)
-  requestedGoldLevel: { type: Number, default: null },           // Gold level user wants to purchase (pending approval via slip)
-  balance: { type: Number, default: 0 },                        // User's balance (commissions, etc.)
-  commissionEarned: { type: Number, default: 0 },              // Total commission earned by the user
+  vipLevel: { type: Number, default: 0 },
+  requestedGoldLevel: { type: Number, default: null },
+  balance: { type: Number, default: 0 }, // User's balance in USDT
+  commissionEarned: { type: Number, default: 0 }, // Total commission earned in USDT
 
   // Request to buy VIP using account balance
   upgradeRequest: {
     targetVIP: { type: Number, default: null },
-    requestedAt: { type: Date, default: null }
-    // Consider adding index: true to 'upgradeRequest.targetVIP' if you frequently query for pending upgrades
+    requestedAt: { type: Date, default: null },
+    // index: { targetVIP: 1 }, // Optional: Index if frequently querying pending upgrades
   },
 
-  // Payment slip upload for Gold purchase approval
-  paymentSlip: {
-    fileId: { type: String, default: null },                    // Telegram file ID of uploaded slip photo
-    status: { type: String, enum: ['pending', 'approved', 'rejected', null], default: null },
+  // Payment proof (slip/TxID) upload for Gold purchase approval
+  paymentSlip: { // Consider renaming to paymentProof if it makes more sense
+    fileId: { type: String, default: null }, // Telegram file ID (for screenshot) or TxID text
+    status: { type: String, enum: ['pending', 'approved', 'rejected', null], default: null, index: true }, // Keep index: true here
     uploadedAt: { type: Date, default: null },
-    processedAt: { type: Date, default: null } // Added to track when the slip was processed by admin
-    // Consider adding index: true to 'paymentSlip.status' if you frequently query for pending slips
+    processedAt: { type: Date, default: null }
   },
 
   // Withdrawal requests log
   withdrawals: {
     type: [{
-      amount: { type: Number, required: true },
-      fee: { type: Number, required: true },
-      status: { type: String, enum: ['pending', 'approved', 'rejected'], default: 'pending' },
+      amount: { type: Number, required: true }, // Amount in USDT
+      fee: { type: Number, required: true },    // Fee in USDT
+      // usdtAmount: { type: Number }, // Optional: if you want to store the converted USDT amount
+      // transactionId: { type: String }, // Optional: if admin provides TxID after sending USDT
+      status: { type: String, enum: ['pending', 'approved', 'rejected'], default: 'pending', index: true }, // Keep index: true here
       requestedAt: { type: Date, default: Date.now },
       processedAt: { type: Date, default: null }
     }],
     default: []
-    // You could potentially add indexes to sub-fields like 'withdrawals.status'
-    // but for embedded arrays, Mongoose creates compound indexes which can be complex.
-    // For simple status checks, a filter on the array might be sufficient.
   },
 
-  // Upgrade history for VIP levels (whether by Gold purchase or balance)
+  // Upgrade history for VIP levels
   upgradeHistory: {
     type: [
       {
-        level: { type: Number },
-        cost: { type: Number }, // Added cost field here for tracking deposit amount
-        approvedAt: { type: Date },
-        approvedBy: { type: String }
+        level: { type: Number, required: true },
+        cost: { type: Number, required: true }, // Cost in USDT
+        method: { type: String, required: true, enum: ['Gold Purchase (Proof)', 'Balance'] }, // Method of upgrade
+        approvedAt: { type: Date, required: true },
+        approvedBy: { type: String, default: 'Admin' } // Could be 'Admin (Proof)' or 'Admin (Balance)'
       }
     ],
     default: []
   },
 
-  // User's bank/payment info for withdrawals
+  // Payment details for withdrawals (USDT TRC20 Wallet)
   paymentDetails: {
-    bankName: { type: String, default: null },
-    accountNumber: { type: String, default: null },
-    accountName: { type: String, default: null },
-    branch: { type: String, default: null }
+    usdtWalletAddress: { type: String, default: null } // Stores user's TRC20 USDT Wallet Address
   }
-}, { timestamps: true });
+}, { timestamps: true }); // Adds createdAt and updatedAt timestamps
+
+// ---
+
+// Index for frequently queried fields
+// KEEP these as they are not defined with 'index: true' directly in the schema,
+// or use sparse: true for the upgradeRequest index.
+userSchema.index({ vipLevel: 1 });
+userSchema.index({ 'upgradeRequest.targetVIP': 1 }, { sparse: true }); // Sparse index for pending upgrades
+
+// REMOVED DUPLICATE INDEXES:
+// userSchema.index({ telegramId: 1 }); // Already covered by unique: true and implied index
+// userSchema.index({ 'paymentSlip.status': 1 }); // Already covered by index: true in the field
+// userSchema.index({ 'withdrawals.status': 1 }); // Already covered by index: true in the field
 
 module.exports = mongoose.model('User', userSchema);

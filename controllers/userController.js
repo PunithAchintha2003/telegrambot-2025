@@ -2,430 +2,469 @@
 
 const User = require('../models/User');
 const crypto = require('crypto');
-const { payCommission } = require('../utils/commission');
-const { GOLD_COST, MIN_WITHDRAWAL_AMOUNT, WITHDRAWAL_FEE } = require('../constants');
+const { payCommission } = require('../utils/commission'); // Assuming this path is correct
+const { VIP_COST, MIN_WITHDRAWAL_AMOUNT, WITHDRAWAL_FEE } = require('../constants');
 
-// The import for getGoldCost is removed as GOLD_COST is directly available from constants.
-
+// Generates a unique referral code
 function generateReferralCode() {
-  return crypto.randomBytes(4).toString('hex');
+  return crypto.randomBytes(4).toString('hex').toUpperCase();
 }
 
-exports.registerUser = async (telegramId, username, referredBy = null) => {
+// Registers a new user
+exports.registerUser = async (telegramId, username, referredByCode = null) => {
   try {
-    if (!telegramId) throw new Error('telegramId is required');
+    if (!telegramId) return { success: false, message: 'Telegram ID is required' };
 
     let user = await User.findOne({ telegramId: telegramId.toString() });
-    if (user) return { success: false, message: 'User already registered', user };
+    if (user) return { success: false, message: 'User already registered.', user };
 
     let referralCode = generateReferralCode();
+    // Ensure referral code is unique
     while (await User.findOne({ referralCode })) {
       referralCode = generateReferralCode();
     }
+
+    let referrer = null;
+    if (referredByCode) {
+        referrer = await User.findOne({ referralCode: referredByCode });
+        if (!referrer) {
+            // Handle invalid referral code, e.g., log it or inform user, but still register
+            console.warn(`Invalid referral code used during registration: ${referredByCode}`);
+            referredByCode = null; // Clear invalid code
+        }
+    }
+
 
     user = new User({
       telegramId: telegramId.toString(),
       username: username || null,
       referralCode,
-      referredBy,
+      referredBy: referrer ? referrer.referralCode : null, // Store referrer's code
       isVerified: false,
       vipLevel: 0,
       balance: 0,
-      upgradeHistory: [], // Ensure this is initialized for new users
-      withdrawals: [], // Ensure this is initialized for new users
-      commissionEarned: 0 // Initialize this field for new users
+      commissionEarned: 0,
+      paymentDetails: { usdtWalletAddress: null }, // Initialize paymentDetails with USDT field
+      upgradeHistory: [],
+      withdrawals: [],
+      paymentSlip: {},
     });
 
     await user.save();
-    return { success: true, message: 'User registered successfully', user };
+    return { success: true, message: 'User registered successfully.', user };
   } catch (err) {
-    console.error('registerUser error:', err);
-    return { success: false, message: 'Internal server error', error: err.message };
+    console.error('Error in registerUser:', err.message);
+    return { success: false, message: 'Internal server error during registration.', error: err.message };
   }
 };
 
+// Verifies a user
 exports.verifyUser = async (telegramId, fullName = null, username = null) => {
   try {
-    if (!telegramId) throw new Error('telegramId is required');
+    if (!telegramId) return { success: false, message: 'Telegram ID is required.' };
 
     const user = await User.findOne({ telegramId: telegramId.toString() });
-    if (!user) return { success: false, message: 'User not found' };
+    if (!user) return { success: false, message: 'User not found.' };
 
     user.isVerified = true;
     if (fullName) user.fullName = fullName;
-    if (username) user.username = username;
+    if (username && user.username !== username) user.username = username; // Update username if changed
 
     await user.save();
-    return { success: true, message: 'User verified successfully', user };
+    return { success: true, message: 'User verified successfully.', user };
   } catch (err) {
-    console.error('verifyUser error:', err);
-    return { success: false, message: 'Internal server error', error: err.message };
+    console.error('Error in verifyUser:', err.message);
+    return { success: false, message: 'Internal server error during verification.', error: err.message };
   }
 };
 
-exports.goldPurchaseRequest = async (telegramId, requestedGoldLevel, paymentSlipFileId) => {
+// Handles a user's request to purchase VIP (VIP upgrade) using payment proof
+exports.goldPurchaseRequest = async (telegramId, requestedGoldLevel, paymentProof) => {
   try {
-    if (!telegramId || !requestedGoldLevel || !paymentSlipFileId) {
-      throw new Error('telegramId, requestedGoldLevel, and paymentSlipFileId required');
+    if (!telegramId || !requestedGoldLevel || !paymentProof) {
+      return { success: false, message: 'Missing required fields: telegramId, requestedGoldLevel, or paymentProof.' };
     }
 
     const user = await User.findOne({ telegramId: telegramId.toString() });
-    if (!user) return { success: false, message: 'User not found' };
+    if (!user) return { success: false, message: 'User not found.' };
 
-    // Check if the requested level is exactly one level higher than current VIP level
     if (requestedGoldLevel !== user.vipLevel + 1) {
-      return { success: false, message: `To acquire VIP Level ${requestedGoldLevel}, you must first acquire VIP Level ${user.vipLevel + 1}.` };
+      return { success: false, message: `Invalid VIP level. You are VIP ${user.vipLevel}, you can only request VIP ${user.vipLevel + 1}.` };
     }
 
-    if (requestedGoldLevel <= user.vipLevel) {
-      return { success: false, message: 'Requested Gold Level must be higher than your current VIP Level' };
+    if (requestedGoldLevel > Object.keys(VIP_COST).length) {
+        return { success: false, message: 'Requested VIP Level is too high or invalid.'};
     }
 
-    // Ensure the requested level is a valid key in GOLD_COST
-    if (!GOLD_COST.hasOwnProperty(requestedGoldLevel)) {
-        return { success: false, message: 'Invalid Gold Level requested.' };
+    if (!VIP_COST.hasOwnProperty(requestedGoldLevel)) {
+        return { success: false, message: 'Invalid VIP Level configuration.' };
     }
+
+    // Check for existing pending request
+    if (user.paymentSlip && user.paymentSlip.status === 'pending') {
+        return { success: false, message: 'You already have a pending upgrade request. Please wait for admin approval.' };
+    }
+
 
     user.paymentSlip = {
-      fileId: paymentSlipFileId,
+      fileId: paymentProof, // Stores TxID (text) or Telegram file_id (for screenshot)
       status: 'pending',
       uploadedAt: new Date(),
     };
     user.requestedGoldLevel = requestedGoldLevel;
 
     await user.save();
-    return { success: true, message: 'Gold purchase request submitted, awaiting admin approval', user };
+    return { success: true, message: 'VIP purchase request submitted. Awaiting admin approval.', user };
   } catch (err) {
-    console.error('goldPurchaseRequest error:', err);
-    return { success: false, message: 'Internal server error', error: err.message };
+    console.error('Error in goldPurchaseRequest:', err.message);
+    return { success: false, message: 'Internal server error.', error: err.message };
   }
 };
 
-exports.requestWithdrawal = async (telegramId, amount) => {
+// Handles a user's withdrawal request
+exports.requestWithdrawal = async (telegramId, amountUSDT) => {
   try {
-    if (!telegramId || !amount) throw new Error('telegramId and amount required');
+    if (!telegramId || !amountUSDT) return { success: false, message: 'Telegram ID and amount are required.' };
+    if (isNaN(parseFloat(amountUSDT)) || parseFloat(amountUSDT) <= 0) return { success: false, message: 'Invalid withdrawal amount.' };
 
     const user = await User.findOne({ telegramId: telegramId.toString() });
-    if (!user) return { success: false, message: 'User not found' };
+    if (!user) return { success: false, message: 'User not found.' };
+    if (!user.isVerified) return { success: false, message: 'Please verify your account first.' };
+    if (user.vipLevel === 0) return { success: false, message: 'You must be a VIP member to withdraw.' };
 
-    if (!user.paymentDetails || !user.paymentDetails.accountNumber) {
-        return { success: false, message: 'Please add your bank account details first using the "Add Withdrawal Details" button.' };
+
+    if (!user.paymentDetails || !user.paymentDetails.usdtWalletAddress) {
+        return { success: false, message: 'Please add your USDT (TRC20) wallet address first via "💰 Add Wallet Address" or /addpaymentdetails.' };
     }
 
-    if (amount < MIN_WITHDRAWAL_AMOUNT) {
-      return { success: false, message: `Minimum withdrawal amount is LKR ${MIN_WITHDRAWAL_AMOUNT}` };
+    const numericAmount = parseFloat(amountUSDT);
+    if (numericAmount < MIN_WITHDRAWAL_AMOUNT) {
+      return { success: false, message: `Minimum withdrawal amount is USDT ${MIN_WITHDRAWAL_AMOUNT}.` };
     }
 
-    const totalDeduction = amount + WITHDRAWAL_FEE;
+    const totalDeduction = numericAmount + WITHDRAWAL_FEE;
     if (user.balance < totalDeduction) {
-      return { success: false, message: `Insufficient balance. You need LKR ${totalDeduction} (LKR ${amount} + LKR ${WITHDRAWAL_FEE} fee). Your current balance is LKR ${user.balance.toFixed(2)}` };
+      return { success: false, message: `Insufficient balance. You need USDT ${totalDeduction.toFixed(2)} (USDT ${numericAmount.toFixed(2)} + USDT ${WITHDRAWAL_FEE} fee). Your balance: USDT ${user.balance.toFixed(2)}.` };
     }
 
+    // Deduct balance immediately upon request
     user.balance -= totalDeduction;
 
     user.withdrawals.push({
-      amount,
+      amount: numericAmount,
       fee: WITHDRAWAL_FEE,
       status: 'pending',
       requestedAt: new Date(),
     });
 
     await user.save();
-    return { success: true, message: 'Withdrawal request submitted, awaiting admin approval', user };
+    return { success: true, message: 'Withdrawal request submitted. It will be processed by an admin.', user };
   } catch (err) {
-    console.error('requestWithdrawal error:', err);
-    return { success: false, message: 'Internal server error', error: err.message };
+    console.error('Error in requestWithdrawal:', err.message);
+    return { success: false, message: 'Internal server error.', error: err.message };
   }
 };
 
-// Admin approves or rejects Gold purchase slip and grants VIP Level
-exports.adminGoldApprove = async (userId, approve, bot) => { // userId is MongoDB _id
+// Admin: Approves or rejects a VIP purchase (VIP upgrade via payment proof)
+exports.adminGoldApprove = async (mongoUserId, approve, botInstance) => {
   try {
-    const user = await User.findById(userId);
+    const user = await User.findById(mongoUserId);
+    if (!user) return { success: false, message: 'User not found.' };
 
-    if (!user) return { success: false, message: 'User not found' };
-
-    if (!user.paymentSlip || user.paymentSlip.status !== 'pending') {
-      return { success: false, message: 'No pending Gold purchase slip found' };
+    if (!user.paymentSlip || user.paymentSlip.status !== 'pending' || !user.requestedGoldLevel) {
+      return { success: false, message: 'No valid pending VIP purchase proof found for this user.' };
     }
 
     const newVIPLevel = user.requestedGoldLevel;
-    const purchaseCost = GOLD_COST[newVIPLevel]; // Get the cost for upgrade history
+    const purchaseCost = VIP_COST[newVIPLevel];
+
+    if (!purchaseCost) {
+        user.paymentSlip.status = 'rejected'; // Mark as rejected if config is bad
+        user.paymentSlip.processedAt = new Date();
+        user.requestedGoldLevel = null;
+        await user.save();
+        return { success: false, message: `Invalid VIP cost configuration for Level ${newVIPLevel}. Request rejected.` };
+    }
 
     if (approve) {
-      if (!newVIPLevel || !purchaseCost) {
-          return { success: false, message: 'Requested Gold Level or its cost missing for approval.' };
-      }
-
-      // Check if user is trying to skip levels through slip approval
+      // Ensure sequential upgrade
       if (newVIPLevel !== user.vipLevel + 1) {
-          return { success: false, message: `Invalid approval: User is trying to skip VIP levels via slip. Current: ${user.vipLevel}, Requested: ${newVIPLevel}.` };
+        user.paymentSlip.status = 'rejected'; // Reject if trying to skip levels
+        user.paymentSlip.processedAt = new Date();
+        await user.save();
+        return { success: false, message: `Invalid approval: User (VIP ${user.vipLevel}) trying to jump to VIP ${newVIPLevel}. Request rejected.` };
       }
 
       user.vipLevel = newVIPLevel;
       user.paymentSlip.status = 'approved';
-      user.paymentSlip.fileId = null;
-      user.requestedGoldLevel = null;
-      // REMOVED: user.balance += purchaseCost; // This line is removed as per your requirement.
-                                            // User's balance should not increase from VIP purchase itself.
+      user.paymentSlip.processedAt = new Date();
+      // user.paymentSlip.fileId remains for record
 
-
-      // Ensure upgradeHistory is an array before pushing
-      if (!user.upgradeHistory) {
-          user.upgradeHistory = [];
-      }
-      // PUSH TO upgradeHistory
+      if (!user.upgradeHistory) user.upgradeHistory = [];
       user.upgradeHistory.push({
           level: newVIPLevel,
-          cost: purchaseCost, // Record the cost of the gold level purchase
+          cost: purchaseCost,
+          method: 'Gold Purchase (Proof)',
           approvedAt: new Date(),
-          method: 'Gold Purchase (Slip)'
+          approvedBy: 'Admin (Proof)'
       });
 
-      // --- Commission Distribution Logic (Delegated to payCommission) ---
+      user.requestedGoldLevel = null; // Clear the requested level
+
+      // Pay commission if a referrer exists
       if (user.referredBy) {
-        await payCommission(user.referredBy, newVIPLevel, bot, user); // Pass 'user' object as referredUser
+        await payCommission(user.referredBy, newVIPLevel, botInstance, user);
       }
 
     } else { // Reject
       user.paymentSlip.status = 'rejected';
-      user.paymentSlip.fileId = null;
+      user.paymentSlip.processedAt = new Date();
       user.requestedGoldLevel = null;
     }
 
     await user.save();
-    return { success: true, message: `Gold purchase slip ${approve ? 'approved' : 'rejected'}`, user };
+    return { success: true, message: `VIP purchase ${approve ? 'approved' : 'rejected'} successfully.`, user };
   } catch (err) {
-    console.error('adminGoldApprove error:', err);
-    return { success: false, message: 'Internal server error', error: err.message };
+    console.error('Error in adminGoldApprove:', err.message);
+    return { success: false, message: 'Internal server error.', error: err.message };
   }
 };
 
-exports.adminWithdrawalProcess = async (telegramId, withdrawalId, approve) => {
+// Admin: Processes (approves or rejects) a withdrawal request
+exports.adminWithdrawalProcess = async (telegramId, withdrawalMongoId, approve) => {
   try {
-    if (!telegramId || !withdrawalId || typeof approve !== 'boolean') {
-      throw new Error('telegramId, withdrawalId, and approve (boolean) required');
+    if (!telegramId || !withdrawalMongoId || typeof approve !== 'boolean') {
+      return { success: false, message: 'Missing required fields.' };
     }
 
     const user = await User.findOne({ telegramId: telegramId.toString() });
-    if (!user) return { success: false, message: 'User not found' };
+    if (!user) return { success: false, message: 'User not found.' };
 
-    const withdrawal = user.withdrawals.id(withdrawalId) || user.withdrawals.find(w => w._id.toString() === withdrawalId);
-
-    if (!withdrawal) return { success: false, message: 'Withdrawal request not found' };
-    if (withdrawal.status !== 'pending') return { success: false, message: 'Withdrawal request already processed' };
+    const withdrawal = user.withdrawals.id(withdrawalMongoId);
+    if (!withdrawal) return { success: false, message: 'Withdrawal request not found.' };
+    if (withdrawal.status !== 'pending') return { success: false, message: 'Withdrawal request already processed.' };
 
     if (approve) {
       withdrawal.status = 'approved';
       withdrawal.processedAt = new Date();
+      // Actual USDT transfer is done manually by admin. This just marks it in DB.
     } else { // Reject
       withdrawal.status = 'rejected';
       withdrawal.processedAt = new Date();
-
-      // Only refund if rejected
+      // Refund the amount (including fee) to user's balance if rejected
       user.balance += (withdrawal.amount + withdrawal.fee);
     }
 
     await user.save();
-    return { success: true, message: `Withdrawal request ${approve ? 'approved' : 'rejected'}`, user };
+    return { success: true, message: `Withdrawal request ${approve ? 'approved' : 'rejected'}.`, user };
   } catch (err) {
-    console.error('adminWithdrawalProcess error:', err);
-    return { success: false, message: 'Internal server error', error: err.message };
+    console.error('Error in adminWithdrawalProcess:', err.message);
+    // If error, and balance was deducted, consider how to handle (e.g. manual check)
+    return { success: false, message: 'Internal server error.', error: err.message };
   }
 };
 
-exports.updatePaymentDetails = async (telegramId, bankName, accountNumber, accountName, branch) => {
+// Updates user's payment details (USDT Wallet Address)
+exports.updatePaymentDetails = async (telegramId, usdtWalletAddress) => {
   try {
-    const user = await User.findOne({ telegramId: telegramId.toString() });
-    if (!user) return { success: false, message: 'User not found' };
+    if (!telegramId || !usdtWalletAddress) return { success: false, message: 'Telegram ID and USDT Wallet Address are required.' };
 
-    user.paymentDetails = {
-      bankName: bankName || null,
-      accountNumber: accountNumber || null,
-      accountName: accountName || null,
-      branch: branch || null,
-    };
+    // Basic TRC20 address validation (starts with 'T', 34 characters)
+    if (!/^T[1-9A-HJ-NP-Za-km-z]{33}$/.test(usdtWalletAddress)) {
+        return { success: false, message: 'Invalid USDT (TRC20) wallet address format.' };
+    }
+
+    const user = await User.findOne({ telegramId: telegramId.toString() });
+    if (!user) return { success: false, message: 'User not found.' };
+
+    if (!user.paymentDetails) user.paymentDetails = {}; // Ensure object exists
+    user.paymentDetails.usdtWalletAddress = usdtWalletAddress;
+
+    // Remove old bank details if they existed (schema migration)
+    user.paymentDetails.bankName = undefined;
+    user.paymentDetails.accountNumber = undefined;
+    user.paymentDetails.accountName = undefined;
+    user.paymentDetails.branch = undefined;
+
     await user.save();
-    return { success: true, message: 'Payment details updated successfully', user };
+    return { success: true, message: 'USDT Wallet address updated successfully.', user };
   } catch (err) {
-    console.error('updatePaymentDetails error:', err);
-    return { success: false, message: 'Internal server error', error: err.message };
+    console.error('Error in updatePaymentDetails:', err.message);
+    return { success: false, message: 'Internal server error.', error: err.message };
   }
 };
 
+// User requests to upgrade VIP using their account balance
 exports.requestUpgradeFromBalance = async (telegramId, targetVIP) => {
     try {
         if (!telegramId || !targetVIP) {
-            throw new Error('telegramId and targetVIP are required');
+            return { success: false, message: 'Telegram ID and target VIP level are required.' };
         }
 
         const user = await User.findOne({ telegramId: telegramId.toString() });
-        if (!user) return { success: false, message: 'User not found' };
+        if (!user) return { success: false, message: 'User not found.' };
 
-        // Ensure user upgrades level by level
         if (targetVIP !== user.vipLevel + 1) {
-            return { success: false, message: `You can only upgrade to VIP Level ${user.vipLevel + 1}.` };
+            return { success: false, message: `Invalid upgrade. You are VIP ${user.vipLevel}, you can only upgrade to VIP ${user.vipLevel + 1}.` };
         }
 
-        if (targetVIP <= user.vipLevel) {
-            return { success: false, message: 'Requested VIP Level must be higher than your current VIP Level.' };
+        if (targetVIP > Object.keys(VIP_COST).length) {
+            return { success: false, message: 'Requested VIP Level is too high or invalid.'};
         }
 
-        const cost = GOLD_COST[targetVIP];
+        const cost = VIP_COST[targetVIP];
         if (!cost) {
-            return { success: false, message: 'Invalid VIP Level requested.' };
+            return { success: false, message: 'Invalid VIP Level cost configuration.' };
         }
 
         if (user.balance < cost) {
-            return { success: false, message: `Insufficient balance. You need LKR ${cost} to upgrade to VIP Level ${targetVIP}. Your current balance is LKR ${user.balance.toFixed(2)}` };
+            return { success: false, message: `Insufficient balance. You need USDT ${cost.toFixed(2)} for VIP ${targetVIP}. Your balance: USDT ${user.balance.toFixed(2)}.` };
+        }
+
+        // Check for existing pending request (either by slip or balance)
+        if ((user.paymentSlip && user.paymentSlip.status === 'pending') || (user.upgradeRequest && user.upgradeRequest.targetVIP)) {
+            return { success: false, message: 'You already have a pending upgrade request. Please wait for admin approval.' };
         }
 
         user.upgradeRequest = {
             targetVIP: targetVIP,
             requestedAt: new Date()
         };
-
+        // Balance is deducted upon admin approval, not here.
         await user.save();
-        return { success: true, message: 'Upgrade request submitted from balance, awaiting admin approval', user };
+        return { success: true, message: 'Upgrade request from balance submitted. Awaiting admin approval.', user };
     } catch (err) {
-        console.error('requestUpgradeFromBalance error:', err);
-        return { success: false, message: 'Internal server error', error: err.message };
+        console.error('Error in requestUpgradeFromBalance:', err.message);
+        return { success: false, message: 'Internal server error.', error: err.message };
     }
 };
 
-exports.adminApproveUpgradeFromBalance = async (userId, approve, bot) => {
+// Admin approves or rejects a VIP upgrade request made from user's balance
+exports.adminApproveUpgradeFromBalance = async (mongoUserId, approve, botInstance) => {
     try {
-        const user = await User.findById(userId);
-
-        if (!user) return { success: false, message: 'User not found' };
+        const user = await User.findById(mongoUserId);
+        if (!user) return { success: false, message: 'User not found.' };
 
         if (!user.upgradeRequest || !user.upgradeRequest.targetVIP) {
-            return { success: false, message: 'No pending upgrade request found for this user.' };
+            return { success: false, message: 'No pending upgrade request from balance found for this user.' };
         }
 
         const targetVIP = user.upgradeRequest.targetVIP;
-        const cost = GOLD_COST[targetVIP];
+        const cost = VIP_COST[targetVIP];
 
         if (!cost) {
-            return { success: false, message: 'Invalid target VIP level in request.' };
+            user.upgradeRequest = null; // Clear invalid request
+            await user.save();
+            return { success: false, message: `Invalid VIP cost configuration for Level ${targetVIP}. Request cancelled.` };
         }
 
         if (approve) {
-            // Re-check balance at approval time to prevent issues if balance changed
+            // Re-check balance at approval time
             if (user.balance < cost) {
-                return { success: false, message: `User has insufficient balance (LKR ${user.balance.toFixed(2)}) for VIP Level ${targetVIP} (Cost: LKR ${cost}). Cannot approve.` };
+                // Don't nullify upgradeRequest here, admin might want to re-evaluate or user top up.
+                // Or, nullify and inform admin clearly. For now, just return error.
+                return { success: false, message: `User balance (USDT ${user.balance.toFixed(2)}) is insufficient for VIP ${targetVIP} (Cost: USDT ${cost}). Approval denied.` };
             }
-
-            // Check if user is trying to skip levels through balance approval
+             // Ensure sequential upgrade
             if (targetVIP !== user.vipLevel + 1) {
-                return { success: false, message: `Invalid approval: User is trying to skip VIP levels via balance. Current: ${user.vipLevel}, Requested: ${targetVIP}.` };
+                user.upgradeRequest = null; // Clear invalid request
+                await user.save();
+                return { success: false, message: `Invalid approval: User (VIP ${user.vipLevel}) trying to jump to VIP ${targetVIP} via balance. Request cancelled.` };
             }
 
             user.balance -= cost;
             user.vipLevel = targetVIP;
-            user.upgradeRequest = null;
 
-            // Ensure upgradeHistory is an array before pushing
-            if (!user.upgradeHistory) {
-                user.upgradeHistory = [];
-            }
-            // PUSH TO upgradeHistory
+
+            if (!user.upgradeHistory) user.upgradeHistory = [];
             user.upgradeHistory.push({
                 level: targetVIP,
-                cost: cost, // Record the cost of the balance upgrade
+                cost: cost,
+                method: 'Balance',
                 approvedAt: new Date(),
                 approvedBy: 'Admin (Balance)'
             });
 
-            // --- Commission Distribution Logic (Delegated to payCommission) ---
+            // Pay commission if a referrer exists
             if (user.referredBy) {
-                await payCommission(user.referredBy, targetVIP, bot, user); // Pass 'user' object as referredUser
+                await payCommission(user.referredBy, targetVIP, botInstance, user);
             }
-
-        } else { // Reject
-            user.upgradeRequest = null;
-            // Optionally, refund the deducted amount if it was deducted at request time (if your flow does that)
-            // Based on your current flow, balance deduction happens at approval, so no refund needed here.
         }
-
+        // For both approve and reject, clear the request
+        user.upgradeRequest = null;
         await user.save();
-        return { success: true, message: `Upgrade request ${approve ? 'approved' : 'rejected'}.`, user };
+        return { success: true, message: `Upgrade request from balance ${approve ? 'approved' : 'rejected'}.`, user };
     } catch (err) {
-        console.error('adminApproveUpgradeFromBalance error:', err);
-        return { success: false, message: 'Internal server error', error: err.message };
+        console.error('Error in adminApproveUpgradeFromBalance:', err.message);
+        return { success: false, message: 'Internal server error.', error: err.message };
     }
 };
 
+// Fetches all user statistics (summary for admin)
 exports.getAllUserStats = async () => {
   try {
-    // Select all necessary fields, including upgradeHistory and withdrawals
-    const users = await User.find({}).select('fullName username telegramId vipLevel upgradeHistory withdrawals balance commissionEarned'); // Include commissionEarned
+    const users = await User.find({}).select('fullName username telegramId vipLevel upgradeHistory withdrawals balance commissionEarned');
 
-    let overallTotalDeposits = 0;
-    let overallTotalWithdrawals = 0;
-    let overallTotalCommissions = 0; // New: overall total commissions
+    let overallTotalDepositsUSDT = 0;
+    let overallTotalWithdrawalsUSDT = 0;
+    let overallTotalCommissionsUSDT = 0;
 
     const usersWithCalculatedStats = users.map(user => {
-      // SAFELY access upgradeHistory and withdrawals, defaulting to empty array if undefined
       const userUpgradeHistory = user.upgradeHistory || [];
       const userWithdrawals = user.withdrawals || [];
 
-      // Calculate total deposited amount based on approved upgrade history
-      // Ensure GOLD_COST is accessible and valid
-      const userDeposited = userUpgradeHistory.reduce((sum, upgrade) => {
-        const cost = GOLD_COST[upgrade.level] || 0;
-        return sum + cost;
+      const userDepositedUSDT = userUpgradeHistory.reduce((sum, upgrade) => {
+        // Ensure upgrade.cost is a number, default to 0 if not
+        return sum + (typeof upgrade.cost === 'number' ? upgrade.cost : 0);
       }, 0);
 
-      // Calculate total approved withdrawal amount
-      const userWithdrawalsApproved = userWithdrawals.reduce((sum, withdrawal) => {
-        return sum + (withdrawal.status === 'approved' ? withdrawal.amount : 0);
+      const userWithdrawalsApprovedUSDT = userWithdrawals.reduce((sum, withdrawal) => {
+        return sum + (withdrawal.status === 'approved' && typeof withdrawal.amount === 'number' ? withdrawal.amount : 0);
       }, 0);
 
-      // Total commission earned by this specific user
-      const userTotalCommissionEarned = user.commissionEarned || 0;
+      const userTotalCommissionEarnedUSDT = typeof user.commissionEarned === 'number' ? user.commissionEarned : 0;
 
+      overallTotalDepositsUSDT += userDepositedUSDT;
+      overallTotalWithdrawalsUSDT += userWithdrawalsApprovedUSDT;
+      overallTotalCommissionsUSDT += userTotalCommissionEarnedUSDT;
 
-      overallTotalDeposits += userDeposited;
-      overallTotalWithdrawals += userWithdrawalsApproved;
-      overallTotalCommissions += userTotalCommissionEarned; // Accumulate for overall total
-
-      // Return user object with calculated fields
       return {
         _id: user._id,
         telegramId: user.telegramId,
         username: user.username,
         fullName: user.fullName,
         vipLevel: user.vipLevel,
-        totalDeposited: userDeposited,
-        totalApprovedWithdrawals: userWithdrawalsApproved,
-        currentBalance: user.balance, // Include current balance
-        totalCommissionEarned: userTotalCommissionEarned // Include total commission earned by user
+        totalDepositedUSDT: userDepositedUSDT,
+        totalApprovedWithdrawalsUSDT: userWithdrawalsApprovedUSDT,
+        currentBalanceUSDT: user.balance,
+        totalCommissionEarnedUSDT: userTotalCommissionEarnedUSDT
       };
     });
 
     return {
       success: true,
-      users: usersWithCalculatedStats, // Return the calculated user data
-      totalDeposits: overallTotalDeposits,
-      totalWithdrawals: overallTotalWithdrawals,
-      totalCommissions: overallTotalCommissions // Return overall total commissions
+      users: usersWithCalculatedStats,
+      totalDepositsUSDT: overallTotalDepositsUSDT,
+      totalWithdrawalsUSDT: overallTotalWithdrawalsUSDT,
+      totalCommissionsUSDT: overallTotalCommissionsUSDT
     };
 
   } catch (err) {
-    console.error('getAllUserStats error:', err);
-    return { success: false, message: 'Internal server error', error: err.message };
+    console.error('Error in getAllUserStats:', err.message);
+    return { success: false, message: 'Internal server error.', error: err.message };
   }
 };
 
+// Fetches details for a single user
 exports.getUserDetails = async (telegramId) => {
   try {
-    // Include all necessary fields for display
-    const user = await User.findOne({ telegramId: telegramId.toString() }).select('-paymentSlip'); // Exclude sensitive/large fields if not needed
-    if (!user) return { success: false, message: 'User not found' };
+    if (!telegramId) return { success: false, message: 'Telegram ID is required.' };
+    // Exclude paymentSlip (proofs) by default unless specifically needed for a view
+    const user = await User.findOne({ telegramId: telegramId.toString() }).select('-paymentSlip');
+    if (!user) return { success: false, message: 'User not found.' };
     return { success: true, user };
   } catch (err) {
-    console.error('getUserDetails error:', err);
-    return { success: false, message: 'Internal server error', error: err.message };
+    console.error('Error in getUserDetails:', err.message);
+    return { success: false, message: 'Internal server error.', error: err.message };
   }
 };

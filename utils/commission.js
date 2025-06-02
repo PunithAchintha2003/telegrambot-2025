@@ -1,67 +1,84 @@
 // utils/commission.js
 
-const User = require('../models/User');
-const { GOLD_COMMISSION_PAYOUTS, GOLD_COST } = require('../constants'); // Import GOLD_COST as well for calculation
+const User = require('../models/User'); // Adjust path as necessary
+const { VIP_COMMISSION_PAYOUTS } = require('../constants');
 
-async function payCommission(referredByCode, purchasedLevel, bot, referredUser) {
+/**
+ * Calculates and pays commission to a referrer.
+ * @param {string} referrerCode - The referral code of the user who referred.
+ * @param {number} purchasedVipLevel - The VIP level purchased by the referred user.
+ * @param {object} bot - The Telegram bot instance for sending notifications.
+ * @param {object} referredUser - The user object of the person who made the VIP purchase.
+ * @returns {Promise<{success: boolean, message: string, amount?: number}>}
+ */
+async function payCommission(referrerCode, purchasedVipLevel, bot, referredUser) {
     try {
-        const referrer = await User.findOne({ referralCode: referredByCode });
+        if (!referrerCode) {
+            // This case should ideally not happen if referredBy is always set for referred users.
+            console.log(`Commission: No referrer code provided for user ${referredUser.telegramId}. No commission paid.`);
+            return { success: false, message: "No referrer code available." };
+        }
+
+        const referrer = await User.findOne({ referralCode: referrerCode });
 
         if (!referrer) {
-            console.warn(`Commission: Referrer with code ${referredByCode} not found.`);
+            console.warn(`Commission: Referrer with code ${referrerCode} not found. User ${referredUser.telegramId} purchased VIP ${purchasedVipLevel}.`);
             return { success: false, message: "Referrer not found." };
         }
 
-        const referrerVipLevel = referrer.vipLevel;
-
-        // Ensure the purchased level is within valid range for GOLD_COMMISSION_PAYOUTS
-        if (purchasedLevel < 1 || purchasedLevel > GOLD_COMMISSION_PAYOUTS.length) {
-            console.warn(`Commission: Invalid purchasedLevel ${purchasedLevel}. No commission awarded.`);
-            return { success: false, message: "Invalid purchased level for commission calculation." };
+        // Ensure the purchased level is valid for commission payouts
+        if (purchasedVipLevel < 1 || purchasedVipLevel > VIP_COMMISSION_PAYOUTS.length) {
+            console.warn(`Commission: Invalid purchased VIP Level ${purchasedVipLevel} by ${referredUser.telegramId}. No commission for referrer ${referrer.telegramId}.`);
+            return { success: false, message: "Invalid purchased VIP level for commission calculation." };
         }
 
-        // Get the potential commission amount for the purchased level
-        // This is the commission *if* the referrer was at or above this level.
-        const potentialCommissionAmount = GOLD_COMMISSION_PAYOUTS[purchasedLevel - 1];
+        // Commission is based on the VIP level *purchased by the referred user*.
+        // The referrer's own VIP level determines if they are *eligible* to receive this commission.
+        const commissionForPurchasedLevel = VIP_COMMISSION_PAYOUTS[purchasedVipLevel - 1]; // Array is 0-indexed
 
-        // Determine the maximum commission the referrer can earn based on THEIR OWN VIP level.
-        // If referrer's VIP level is N, they can earn the commission amount associated with VIP level N.
-        let maxReferrerEligibleCommission = 0;
-        if (referrerVipLevel > 0 && referrerVipLevel <= GOLD_COMMISSION_PAYOUTS.length) {
-             maxReferrerEligibleCommission = GOLD_COMMISSION_PAYOUTS[referrerVipLevel - 1];
-        } else {
-            // If referrer has VIP level 0 or an invalid level, they cannot earn commission.
-            console.log(`Commission: Referrer ${referrer.telegramId} has VIP level ${referrerVipLevel}. Cannot earn commission.`);
-            return { success: false, message: "Referrer not eligible for commission based on VIP level." };
+        // Referrer must be at least VIP 1 to earn any commission.
+        if (referrer.vipLevel < 1) {
+            console.log(`Commission: Referrer ${referrer.telegramId} (VIP ${referrer.vipLevel}) is not eligible for commission from ${referredUser.telegramId}'s VIP ${purchasedVipLevel} purchase.`);
+            return { success: false, message: "Referrer is not VIP 1 or higher, thus not eligible for commission." };
         }
 
-        // The actual commission earned is the minimum of:
-        // 1. The commission amount for the *referred user's purchased level*
-        // 2. The maximum commission the *referrer is eligible for based on their own VIP level*
-        const earnedCommission = Math.min(potentialCommissionAmount, maxReferrerEligibleCommission);
+        // The actual commission earned by the referrer is the commission associated with the *referred user's new VIP level*,
+        // provided the referrer is VIP 1 or higher.
+        // Some systems might cap the commission based on the referrer's own VIP level (e.g., a VIP 1 referrer cannot earn VIP 5 commission).
+        // Your current VIP_COMMISSION_PAYOUTS seems to imply a direct payout based on the purchased level.
+        // If you want to cap it, you'd do:
+        // const maxCommissionReferrerCanEarn = VIP_COMMISSION_PAYOUTS[Math.min(referrer.vipLevel, VIP_COMMISSION_PAYOUTS.length) - 1];
+        // const earnedCommission = Math.min(commissionForPurchasedLevel, maxCommissionReferrerCanEarn);
+        // For now, let's assume direct payout if referrer is VIP 1+
+        const earnedCommission = commissionForPurchasedLevel;
+
 
         if (earnedCommission > 0) {
             referrer.balance += earnedCommission;
-            referrer.commissionEarned = (referrer.commissionEarned || 0) + earnedCommission; // Ensure commissionEarned is initialized
+            referrer.commissionEarned = (referrer.commissionEarned || 0) + earnedCommission;
             await referrer.save();
 
             // Notify referrer
             if (bot && referrer.telegramId) {
-                const referredUserName = referredUser.fullName || referredUser.username || `User ID: ${referredUser.telegramId}`;
-                await bot.sendMessage(referrer.telegramId,
-                    `💰 You earned LKR ${earnedCommission.toFixed(2)} commission! ` +
-                    `Your referred user ${referredUserName} purchased VIP Level ${purchasedLevel}.`
-                );
+                const referredUserName = referredUser.fullName || referredUser.username || `User ${referredUser.telegramId.slice(-4)}`;
+                try {
+                    await bot.sendMessage(referrer.telegramId,
+                        `💰 Congratulations! You've earned USDT ${earnedCommission.toFixed(2)} commission. ` +
+                        `Your referred user, ${referredUserName}, has upgraded to VIP Level ${purchasedVipLevel}.`
+                    );
+                } catch (notifyError) {
+                    console.error(`Commission: Failed to notify referrer ${referrer.telegramId} about commission. Error: ${notifyError.message}`);
+                }
             }
-            console.log(`Commission awarded: LKR ${earnedCommission.toFixed(2)} to ${referrer.telegramId} from ${referredUser.telegramId}'s VIP ${purchasedLevel} purchase.`);
+            console.log(`Commission: USDT ${earnedCommission.toFixed(2)} awarded to ${referrer.telegramId} (VIP ${referrer.vipLevel}) from ${referredUser.telegramId}'s VIP ${purchasedVipLevel} purchase.`);
             return { success: true, message: "Commission paid successfully.", amount: earnedCommission };
         } else {
-            console.log(`Commission: Earned commission was 0 or less for referrer ${referrer.telegramId} from user ${referredUser.telegramId} (purchased level ${purchasedLevel}).`);
-            return { success: false, message: "No eligible commission amount or referrer's VIP level too low." };
+            console.log(`Commission: Calculated commission was 0 or less for referrer ${referrer.telegramId} from user ${referredUser.telegramId} (purchased VIP level ${purchasedVipLevel}).`);
+            return { success: false, message: "No eligible commission amount calculated." };
         }
 
     } catch (error) {
-        console.error("Error in payCommission:", error);
+        console.error("Error in payCommission utility:", error);
         return { success: false, message: "Internal server error during commission payment." };
     }
 }

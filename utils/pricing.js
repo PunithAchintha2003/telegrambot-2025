@@ -1,13 +1,20 @@
 // utils/pricing.js
 
-// Renamed from VIP_COST to GOLD_COST
-const { GOLD_COST } = require('../constants');
+const { VIP_COST } = require('../constants'); // Assuming constants.js is in the parent directory or configured in require paths
 
-// Renamed from getVipCost to getGoldCost
+/**
+ * Gets the cost for a specific Gold/VIP level.
+ * @param {number} level - The VIP level.
+ * @returns {number} The cost of the level, or 0 if the level is not found or invalid.
+ */
 function getGoldCost(level) {
-    return GOLD_COST[level] || 0; // Return 0 if level not found
+    if (typeof level !== 'number' || level < 1) {
+        console.warn(`getGoldCost: Invalid level provided: ${level}`);
+        return 0;
+    }
+    return VIP_COST[level] || 0; // Return 0 if level not defined in VIP_COST
 }
 
 module.exports = {
-    getGoldCost // Export new name
+    getGoldCost
 };
