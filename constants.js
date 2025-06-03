@@ -11,7 +11,8 @@ const VIP_COST = {
   8: 400,
   9: 600,
   10: 800,
-  11: 1000
+  11: 1000,
+  12: 2000
 };
 
 const WITHDRAWAL_FEE = 3; // This would be in USDT
@@ -30,7 +31,8 @@ const VIP_COMMISSION_PAYOUTS = [
     100,// Max commission for a VIP 8 referrer
     150,// Max commission for a VIP 9 referrer
     200,// Max commission for a VIP 10 referrer
-    250 // Max commission for a VIP 11 referrer
+    250, // Max commission for a VIP 11 referrer
+    500 // Max commission for a VIP 12 referrer
 ];
 
 const GENERAL_COMMISSION_RATE = 0.25; // 25% for purchases of VIP 2 and above
