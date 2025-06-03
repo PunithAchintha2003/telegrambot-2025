@@ -100,7 +100,8 @@ function isAdmin(userId) {
 // --- Register Bot Commands ---
 // Pass the bot instance, configurations, isAdmin helper, and keyboards to command handlers
 registerAdminCommands(bot, adminIds, adminKeyboard);
-registerUserCommands(bot, CHANNEL_USERNAME, isAdmin, userKeyboard); // Pass isAdmin and userKeyboard
+// MODIFIED LINE: Pass adminIds to registerUserCommands
+registerUserCommands(bot, CHANNEL_USERNAME, isAdmin, userKeyboard, adminIds);
 
 
 // --- Simplified /start command handler in index.js ---
@@ -119,7 +120,7 @@ bot.onText(/\/start$/, async (msg) => { // Regex matches /start exactly, without
             return;
         }
         // For regular users, userCommands.js handleStartCommand will manage the full flow.
-        // This can be a simple fallback or ensure the keyboard if userCommands doesn't always send one.
+        // This can be a simple fallback or ensure the keyboard if userCommands.js doesn't always send one.
         // However, to avoid double messages, it's often best to let userCommands.js handleStartCommand fully.
         // If userCommands.js handleStartCommand is robust, this specific listener might become redundant
         // or could be removed if userCommands.js catches all /start variations.

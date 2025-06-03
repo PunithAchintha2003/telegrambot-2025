@@ -13,11 +13,32 @@ const {
 // Using a Map to store user-specific states for multi-step conversations
 const userStates = new Map();
 
+// Helper function to escape MarkdownV2 special characters for safe display
+const escapeMarkdown = (text) => {
+  if (typeof text !== 'string') return String(text); // Convert non-string to string
+  return text.replace(/([_*\[\]()~`>#+\-=|{}.!])/g, '\\$1');
+};
+
 // This function registers all user-facing commands and message handlers.
-function registerUserCommands(bot, channelIdentifier, isAdminFunction, userKeyboard) {
+// MODIFIED SIGNATURE: Added adminIdsList
+function registerUserCommands(bot, channelIdentifier, isAdminFunction, userKeyboard, adminIdsList) {
   // Use the passed userKeyboard for consistency
   const currentMainMenuKeyboard = userKeyboard;
   const isAdmin = isAdminFunction; // Use the passed isAdmin function
+  const ADMIN_TELEGRAM_IDS = adminIdsList; // Store admin IDs
+
+  // Helper function to send notifications to all admins
+  const notifyAdmins = async (message) => {
+    if (ADMIN_TELEGRAM_IDS && ADMIN_TELEGRAM_IDS.length > 0) {
+      for (const adminId of ADMIN_TELEGRAM_IDS) {
+        try {
+          await bot.sendMessage(adminId, message, { parse_mode: 'Markdown' });
+        } catch (error) {
+          console.error(`Failed to send notification to admin ${adminId}:`, error.message);
+        }
+      }
+    }
+  };
 
   // --- Command Handler Functions ---
 
@@ -50,9 +71,9 @@ function registerUserCommands(bot, channelIdentifier, isAdminFunction, userKeybo
           if (user.referredBy) { // Check if referredBy was successfully set
               const referrer = await User.findOne({ referralCode: user.referredBy });
               if (referrer) {
-                welcomeMessage += `\n\nYou were referred by ${referrer.fullName || referrer.username || user.referredBy}.`;
+                welcomeMessage += `\n\nYou were referred by ${escapeMarkdown(referrer.fullName || referrer.username || user.referredBy)}.`;
               } else {
-                welcomeMessage += `\n\nYou were referred by code: \`${user.referredBy}\`.`;
+                welcomeMessage += `\n\nYou were referred by code: \`${escapeMarkdown(user.referredBy)}\`.`;
               }
           }
           await bot.sendMessage(chatId, welcomeMessage, currentMainMenuKeyboard);
@@ -75,7 +96,7 @@ function registerUserCommands(bot, channelIdentifier, isAdminFunction, userKeybo
         }
         if (nameUpdated) await user.save();
 
-        await bot.sendMessage(chatId, `👋 Welcome back, ${user.fullName || user.username}!`, currentMainMenuKeyboard);
+        await bot.sendMessage(chatId, `👋 Welcome back, ${escapeMarkdown(user.fullName || user.username)}!`, currentMainMenuKeyboard);
       }
     } catch (error) {
       console.error('Error in handleStartCommand:', error);
@@ -233,7 +254,7 @@ function registerUserCommands(bot, channelIdentifier, isAdminFunction, userKeybo
       }
 
       if (!user.paymentDetails || !user.paymentDetails.usdtWalletAddress) {
-        await bot.sendMessage(chatId, `⚠️ You need to add your USDT (TRC20) wallet address before requesting a withdrawal.\nUse the "💰 Add Wallet Address" button or type /addpaymentdetails.`, currentMainMenuKeyboard);
+        await bot.sendMessage(chatId, `⚠️ You need to add your USDT (TRC20) wallet address before requesting a withdrawal.\nUse the "💰 Add Wallet Address" button.`, currentMainMenuKeyboard);
         return;
       }
 
@@ -243,7 +264,7 @@ function registerUserCommands(bot, channelIdentifier, isAdminFunction, userKeybo
       }
 
       userStates.set(telegramId, { command: 'withdraw', step: 'ask_amount' });
-      await bot.sendMessage(chatId, `💸 Enter withdrawal amount in USDT.\nMinimum: USDT ${MIN_WITHDRAWAL_AMOUNT}\nFee: USDT ${WITHDRAWAL_FEE}\nYour balance: USDT ${user.balance.toFixed(2)}\n\n( Ex: If your account balance is USDT 1000, submit a withdrawal amount of USDT 997 or less )\n\nYour USDT (TRC20) address for withdrawal: \`${user.paymentDetails.usdtWalletAddress}\``,
+      await bot.sendMessage(chatId, `💸 Enter withdrawal amount in USDT.\nMinimum: USDT ${MIN_WITHDRAWAL_AMOUNT}\nFee: USDT ${WITHDRAWAL_FEE}\nYour balance: USDT ${user.balance.toFixed(2)}\n\n( Ex: If your account balance is USDT 1000, submit a withdrawal amount of USDT 997 or less )\n\nYour USDT (TRC20) address for withdrawal: \`${escapeMarkdown(user.paymentDetails.usdtWalletAddress)}\``,
       { parse_mode: 'Markdown', reply_markup: { remove_keyboard: true } });
 
     } catch (error) {
@@ -269,7 +290,7 @@ function registerUserCommands(bot, channelIdentifier, isAdminFunction, userKeybo
       const referredUsers = await User.find({ referredBy: user.referralCode });
 
       let message = `🔗 Your Unique Referral Link: \n\n\`${referralLink}\`\n\n_(Share this link to invite others!)_\n_(Tap Link to copy)_\n\n`;
-      message += `💰 Your Referral Code: \`${user.referralCode}\`\n\n`;
+      message += `💰 Your Referral Code: \`${escapeMarkdown(user.referralCode)}\`\n\n`;
 
 
       if (referredUsers.length === 0) {
@@ -277,7 +298,7 @@ function registerUserCommands(bot, channelIdentifier, isAdminFunction, userKeybo
       } else {
         message += `🏆 You have referred ${referredUsers.length} user(s):\n`;
         referredUsers.sort((a, b) => (b.vipLevel - a.vipLevel) || (a.fullName || a.username || '').localeCompare(b.fullName || b.username || '')).forEach((refUser, index) => {
-          message += `${index + 1}. ${refUser.fullName || refUser.username || `User ${refUser.telegramId.slice(-4)}`} (VIP: ${refUser.vipLevel}, Verified: ${refUser.isVerified ? '✅' : '❌'})\n`;
+          message += `${index + 1}. ${escapeMarkdown(refUser.fullName || refUser.username || `User ${refUser.telegramId.slice(-4)}`)} (VIP: ${refUser.vipLevel}, Verified: ${refUser.isVerified ? '✅' : '❌'})\n`;
         });
       }
       await bot.sendMessage(chatId, message, { parse_mode: 'Markdown', ...currentMainMenuKeyboard, disable_web_page_preview: true });
@@ -303,7 +324,7 @@ function registerUserCommands(bot, channelIdentifier, isAdminFunction, userKeybo
       const currentAddress = user.paymentDetails?.usdtWalletAddress;
       let promptMessage = "Please enter your USDT (TRC20) Wallet Address for withdrawals:";
       if (currentAddress) {
-        promptMessage = `Your current USDT (TRC20) address is: \`${currentAddress}\`\n\nEnter a new address to update it, or type 'cancel' to keep the current one.`;
+        promptMessage = `Your current USDT (TRC20) address is: \`${escapeMarkdown(currentAddress)}\`\n\nEnter a new address to update it, or type 'cancel' to keep the current one.`;
       }
 
       userStates.set(telegramId, { command: 'add_wallet_address', step: 'ask_usdt_address' });
@@ -382,7 +403,7 @@ function registerUserCommands(bot, channelIdentifier, isAdminFunction, userKeybo
                   }
 
                   userStates.set(telegramId, { ...state, step: 'confirm_withdraw', data: { amount } });
-                  await bot.sendMessage(chatId, `You requested to withdraw USDT ${amount.toFixed(2)}.\nFee: USDT ${WITHDRAWAL_FEE}.\nTotal deduction: USDT ${totalDeduction.toFixed(2)}.\nWithdrawal to: \`${user.paymentDetails.usdtWalletAddress}\`\n\nConfirm withdrawal?`, {
+                  await bot.sendMessage(chatId, `You requested to withdraw USDT ${amount.toFixed(2)}.\nFee: USDT ${WITHDRAWAL_FEE}.\nTotal deduction: USDT ${totalDeduction.toFixed(2)}.\nWithdrawal to: \`${escapeMarkdown(user.paymentDetails.usdtWalletAddress)}\`\n\nConfirm withdrawal?`, {
                     parse_mode: 'Markdown',
                     reply_markup: {
                       inline_keyboard: [
@@ -439,6 +460,19 @@ function registerUserCommands(bot, channelIdentifier, isAdminFunction, userKeybo
                 const result = await userController.goldPurchaseRequest(telegramId, requestedGoldLevel, paymentProofData);
                 if (result.success) {
                     await bot.sendMessage(chatId, `✅ Your payment proof for VIP Level ${requestedGoldLevel} has been submitted.\nPlease wait for admin approval (usually within 24 hours). We'll notify you.`, currentMainMenuKeyboard);
+                    
+                    // --- ADMIN NOTIFICATION FOR VIP PAYMENT PROOF ---
+                    const userForNotif = result.user;
+                    const adminMessage = `📢 *New VIP Payment Proof Submitted*
+User: ${escapeMarkdown(userForNotif.fullName || userForNotif.username || 'N/A')} (ID: \`${userForNotif.telegramId}\`)
+Requested VIP Level: *${requestedGoldLevel}*
+Proof Data/TxID: \`${escapeMarkdown(paymentProofData)}\`
+User MongoDB ID: \`${userForNotif._id}\`
+
+Use \`/listslips\` to review.`;
+                    await notifyAdmins(adminMessage);
+                    // --- END ADMIN NOTIFICATION ---
+
                 } else {
                     await bot.sendMessage(chatId, `❌ Failed to submit proof: ${result.message}`, currentMainMenuKeyboard);
                 }
@@ -460,6 +494,21 @@ function registerUserCommands(bot, channelIdentifier, isAdminFunction, userKeybo
                     const upgradeResult = await userController.requestUpgradeFromBalance(telegramId, targetVIPForBalance);
                     if (upgradeResult.success) {
                         await bot.sendMessage(chatId, `✅ VIP Level ${targetVIPForBalance} upgrade request from balance submitted. Awaiting admin approval.`, currentMainMenuKeyboard);
+                        
+                        // --- ADMIN NOTIFICATION FOR VIP UPGRADE FROM BALANCE ---
+                        const userForNotif = upgradeResult.user;
+                        const adminMessage = `📢 *New VIP Upgrade Request (from Balance)*
+User: ${escapeMarkdown(userForNotif.fullName || userForNotif.username || 'N/A')} (ID: \`${userForNotif.telegramId}\`)
+Current VIP: ${userForNotif.vipLevel}
+Requested VIP Level: *${targetVIPForBalance}*
+User Balance: USDT ${userForNotif.balance.toFixed(2)}
+Upgrade Cost: USDT ${costForBalance.toFixed(2)}
+User MongoDB ID: \`${userForNotif._id}\`
+
+Use \`/pendingupgrades\` to review.`;
+                        await notifyAdmins(adminMessage);
+                        // --- END ADMIN NOTIFICATION ---
+
                     } else {
                         await bot.sendMessage(chatId, `❌ Upgrade failed: ${upgradeResult.message}`, currentMainMenuKeyboard);
                     }
@@ -569,7 +618,7 @@ _(Tap address to copy)_
       else if (data.startsWith('submit_proof_for_gold_')) {
         const level = parseInt(data.split('_')[4]); // Adjusted index based on 'submit_proof_for_gold_'
         userStates.set(telegramId, { command: 'upload_payment_proof', step: 'waiting_for_proof', data: { level } });
-        await bot.sendMessage(chatId, `Please send your payment proof for VIP Level ${level}.\nSend a Screenshot of the completed transaction.`, { reply_markup: { remove_keyboard: true } });
+        await bot.sendMessage(chatId, `Please send your payment proof for VIP Level ${level}.\nSend a Screenshot of the completed transaction or tap '/start' to Cancel.`, { reply_markup: { remove_keyboard: true } });
         // Remove the inline keyboard from the "Our USDT Address is..." message
         await bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: chatId, message_id: callbackQuery.message.message_id }).catch(e => console.log("Error removing kbd for proof submission:", e.message));
       }
@@ -585,6 +634,26 @@ _(Tap address to copy)_
         const result = await userController.requestWithdrawal(telegramId, amount);
         if (result.success) {
           await bot.sendMessage(chatId, `✅ Withdrawal request for USDT ${amount.toFixed(2)} submitted successfully! It will be processed by an admin. You will be notified.`, currentMainMenuKeyboard);
+          
+          // --- ADMIN NOTIFICATION FOR WITHDRAWAL REQUEST ---
+          const userForNotif = result.user;
+          // Find the specific withdrawal request that was just added (it should be the last one with status pending for this amount)
+          const withdrawalEntry = userForNotif.withdrawals.filter(w => w.status === 'pending' && w.amount === amount).pop();
+          const withdrawalId = withdrawalEntry ? withdrawalEntry._id : 'N/A';
+
+          const adminMessage = `📢 *New USDT Withdrawal Request*
+User: ${escapeMarkdown(userForNotif.fullName || userForNotif.username || 'N/A')} (ID: \`${userForNotif.telegramId}\`)
+Amount: USDT *${amount.toFixed(2)}*
+Fee: USDT ${WITHDRAWAL_FEE.toFixed(2)}
+User Balance After Deduction: USDT ${userForNotif.balance.toFixed(2)} 
+User Wallet: \`${escapeMarkdown(userForNotif.paymentDetails?.usdtWalletAddress || 'N/A')}\`
+User MongoDB ID: \`${userForNotif._id}\`
+Withdrawal ID: \`${withdrawalId}\`
+
+Use \`/withdrawals\` to review.`;
+          await notifyAdmins(adminMessage);
+          // --- END ADMIN NOTIFICATION ---
+
         } else {
           await bot.sendMessage(chatId, `❌ Withdrawal failed: ${result.message}`, currentMainMenuKeyboard);
         }
@@ -624,7 +693,7 @@ _(Tap address to copy)_
   });
 
   // --- Fallback for unknown commands from non-admins ---
-  bot.onText(/^\/(?!start|verify|mybalance|buygold|withdraw|referrals|addpaymentdetails|admin|listslips|withdrawals|pendingupgrades|userstats).+/, async (msg) => {
+  bot.onText(/^\/(?!start|verify|mybalance|buygold|withdraw|referrals|addpaymentdetails|admin|listslips|withdrawals|pendingupgrades|userstats|finduser).+/, async (msg) => { // Added finduser to ignore list for admins
       const chatId = msg.chat.id;
       const telegramId = msg.from.id.toString();
 
