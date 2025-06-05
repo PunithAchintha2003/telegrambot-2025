@@ -78,7 +78,7 @@ function registerUserCommands(bot, channelIdentifier, isAdminFunction, userKeybo
           }
           await bot.sendMessage(chatId, welcomeMessage, currentMainMenuKeyboard);
           // Optionally, prompt for verification immediately
-          await bot.sendMessage(chatId, `Please join our channel t.me/${channelIdentifier} and then type /verify to complete your setup.`, { reply_markup: { remove_keyboard: true }});
+          await bot.sendMessage(chatId, `Please join our channel t.me/${channelIdentifier} and then tap /verify to complete your setup.\n\n By verifying your account, you agree to our Terms and Conditions!`, { reply_markup: { remove_keyboard: true }});
 
         } else {
           await bot.sendMessage(chatId, `⚠️ Registration failed: ${registrationResult.message}`, currentMainMenuKeyboard);
@@ -350,7 +350,6 @@ function registerUserCommands(bot, channelIdentifier, isAdminFunction, userKeybo
       });
   };
 
-
   // --- Register Command Listeners ---
   bot.onText(/\/start(?: (.+))?/, handleStartCommand);
   bot.onText(/\/verify/, handleVerifyCommand);
@@ -360,7 +359,6 @@ function registerUserCommands(bot, channelIdentifier, isAdminFunction, userKeybo
   bot.onText(/\/referrals|🔗 My Referrals/, handleReferralsCommand);
   bot.onText(/\/addpaymentdetails|💰 Add Wallet Address/, handleAddWalletAddressCommand); // Updated text
   bot.onText(/❓ Support/, handleSupportCommand);
-
 
   // --- General message handler for multi-step conversations and new user fallback ---
   bot.on('message', async (msg) => {
@@ -542,7 +540,6 @@ Use \`/pendingupgrades\` to review.`;
     }
   });
 
-
   // --- Handle inline keyboard callbacks for user actions ---
   bot.on('callback_query', async (callbackQuery) => {
     const chatId = callbackQuery.message.chat.id;
@@ -599,6 +596,7 @@ _(Tap address to copy)_
 **Important:**
 1. Ensure you are sending **USDT on the TRC20 (Tron) network**.
 2. After payment, click the button below to submit your proof.
+3. Need help with your payment? Contact our support team.
 
 ⚠️ Incorrect network transfers may result in permanent loss of funds.
         `;

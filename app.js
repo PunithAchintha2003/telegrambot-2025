@@ -29,7 +29,7 @@ expressApp.get('/api', (req, res) => {
 
 // Catch-all for /api routes that were not matched by userRoutes or the GET /api above.
 // This middleware will execute if a request starts with /api but doesn't match any defined /api/... route.
-// IMPORTANT: This should come AFTER all other more specific /api route handlers.
+// IMPORTANT: This should come  all other more specific /api route handlers.
 expressApp.use('/api', (req, res, next) => {
     // If we reach here, it means no more specific /api route was found.
     res.status(404).json({ error: "Requested API endpoint not found." });

@@ -310,7 +310,6 @@ ${user.withdrawals.length > 0 ? 'Last Withdrawal Req: USDT ' + user.withdrawals.
     }
   });
 
-
   // --- Handle all admin inline keyboard callbacks ---
   bot.on('callback_query', async (callbackQuery) => {
     const chatId = callbackQuery.message.chat.id; // Admin's chat ID
@@ -398,7 +397,7 @@ ${user.withdrawals.length > 0 ? 'Last Withdrawal Req: USDT ' + user.withdrawals.
                 const amount = approvedWithdrawal ? approvedWithdrawal.amount.toFixed(2) : 'N/A';
                 await bot.sendMessage(chatId, `✅ Withdrawal of USDT ${amount} approved for ${result.user.fullName || result.user.telegramId}. Instructed to send USDT.`, adminKeyboard);
                 if (result.user.telegramId) {
-                    await bot.sendMessage(result.user.telegramId.toString(), `✅ Your withdrawal request of USDT ${amount} has been approved and is being processed! You should receive USDT in your wallet shortly.`);
+                    await bot.sendMessage(result.user.telegramId.toString(), `✅ Your withdrawal request of USDT ${amount} has been approved and is being processed! You should receive USDT in your wallet (usually within 24 hours).`);
                 }
                 await bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: chatId, message_id: callbackQuery.message.message_id });
             } else {
